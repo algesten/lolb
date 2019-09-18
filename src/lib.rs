@@ -44,8 +44,8 @@ where
 {
     /// The acme account to use for managing TLS certificates.
     account: Account<P>,
-    /// Configured domains.
-    domains: Vec<ServiceDomain>,
+    /// Configured serviced domains.
+    services: Services,
     /// Pre-auth service connections where we now expect a http2 server conn.
     pre_auth: HashMap<PreAuthedKey, PreAuthed>,
 }
@@ -107,8 +107,13 @@ where
             lock.pre_auth.remove(&key)
         };
         if let Some(authed) = authed {
+            // discard the preauth from the incoming bytes.
+            let read = conn.socket().read(&mut peeked).await?;
+            if read < PREAUTH_LEN {
+                panic!("Discarded less than peeked length of preauth");
+            }
             // start handling the authed service.
-            handle_service(lb.clone(), conn, authed).await?;
+            add_preauthed_service(lb.clone(), conn, authed).await?;
             return Ok(());
         } else {
             // sending "lolb" without any corresonding preauth is an error
@@ -122,15 +127,39 @@ where
     Ok(())
 }
 
-async fn handle_service<P, S>(
+async fn add_preauthed_service<P, S>(
     lb: Arc<Mutex<LoadBalancer<P>>>,
-    conn: Connection<S>,
+    mut conn: Connection<S>,
     preauthed: PreAuthed,
 ) -> LolbResult<()>
 where
     P: Persist,
     S: Socket,
 {
+    // Start an h2 client against this service.
+    let (h2, conn) = h2::client::handshake(conn.socket()).await?;
+
+    // The idea is that the drive closure below retains the strong reference to
+    // the service connection and the weak reference goes into the service routing
+    // logic. Thus on disconnect, the weak refererence will instantly be invalid.
+    let service_conn = ServiceConnection(h2);
+    let strong = Arc::new(service_conn);
+    let weak = Arc::downgrade(&strong);
+
+    let drive = async move {
+        let _strong = strong;
+        if let Err(e) = conn.await {
+            // service probably disconnected. that's expected.
+            debug!("Service disconnect: {}", e);
+        }
+    };
+
+    // tokio::spawn(drive);
+
+    // add service connection to service definitions.
+    let mut lock = lb.lock().unwrap();
+    lock.services.add_preauthed(preauthed, weak);
+
     Ok(())
 }
 
