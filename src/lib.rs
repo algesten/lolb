@@ -22,6 +22,7 @@ mod limit;
 pub mod peek;
 mod respond;
 mod service;
+mod util;
 
 use body::*;
 use conn::*;
@@ -194,7 +195,7 @@ where
         };
     }
 
-    // Here we normalize the incoming requests that can be either http11 or htt2
+    // Here we normalize the incoming requests that can be either http11 or http2
     // to a common format for routing, then normalize the responses to a common format
     // for responding.
     if http_version == HttpVersion::Http2 {

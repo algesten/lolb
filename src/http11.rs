@@ -119,6 +119,7 @@ fn try_parse_http11(buf: &[u8], scheme: &str) -> LolbResult<Option<(http::Reques
 }
 
 /// Helper with generic writer.
+#[allow(clippy::write_with_newline)]
 pub(crate) fn write_http11_response<W: io::Write, X>(
     w: &mut W,
     response: http::Response<X>,

@@ -1,6 +1,7 @@
+use crate::util::ArcExt;
 use acme_lib::Certificate;
 use serde::{Deserialize, Serialize};
-use std::sync::{Arc, Weak};
+use std::sync::Weak;
 use std::time::{Duration, Instant};
 
 // It's important the peek doesn't expect more than the smallest possible request.
@@ -139,18 +140,17 @@ impl Services {
                 .find(|c| c.upgrade().is_some())
                 .and_then(|c| c.upgrade())
             {
-                // at this point we hold a _strong_ reference to Arc<ServiceConnection>
-                // we can clone it by using into_raw since it will not be gone by
-                // connection disconnecting. whether it will work to send requests to
-                // is a whole other matter.
-                let _strong = Arc::clone(&s);
-                let raw = Arc::into_raw(s);
-                let clone = unsafe { (*raw).clone() };
-                break Some(clone);
+                // ServiceConnection contains a h2 SendRequest, that we must clone to
+                // get "our own" instance to send requests to.
+                //
+                // At this point we hold a _strong_ reference
+                // to Arc<ServiceConnection> and it will not be gone by connection disconnecting.
+                // Whether it will work to send requests to is a whole other matter.
+                break Some(s.clone_contained());
             }
         }?;
 
-        None
+        Some(conn)
     }
 }
 
