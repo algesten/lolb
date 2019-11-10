@@ -20,7 +20,7 @@ impl<'a, S: Socket> RecvBody<'a, S> {
         match self {
             RecvBody::Http2(r) => r.data().await.map(|r| Ok(r?)),
             RecvBody::Http11Plain(r) => read_chunk(r).await,
-            RecvBody::Http11Chunked(_) => None, // TODO (see chunked.rs)
+            RecvBody::Http11Chunked(_) => unimplemented!(), // TODO (see chunked.rs)
         }
     }
 
@@ -64,4 +64,20 @@ where
     Http2Server(h2::server::SendResponse<Bytes>),
     Http11(LimitWrite<&'a mut Peekable<S>>),
     Http11Chunked(ChunkedEncoder),
+}
+
+pub(crate) struct PollCapacity<'a, B: bytes::IntoBuf>(pub &'a mut h2::SendStream<B>);
+
+use std::future::Future;
+use std::pin::Pin;
+use std::task::{Context, Poll};
+
+impl<'a, B: bytes::IntoBuf> Future for PollCapacity<'a, B> {
+    type Output = Result<usize, h2::Error>;
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        match Pin::new(&mut self.get_mut().0).poll_capacity(cx) {
+            Poll::Ready(Some(res)) => Poll::Ready(res),
+            Poll::Ready(None) | Poll::Pending => Poll::Pending,
+        }
+    }
 }

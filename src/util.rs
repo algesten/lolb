@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 /// Extensions to Arc.
-pub trait ArcExt<T> {
+pub(crate) trait ArcExt<T> {
     /// Clones the value contained in the Arc.
     fn clone_contained(&self) -> T;
 }

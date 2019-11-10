@@ -231,7 +231,15 @@ where
     P: Persist,
     S: Socket,
 {
-    Err(LolbError::Message(""))
+    let s_conn = {
+        let mut lock = lb.lock().unwrap();
+        lock.services.route(&req)
+    };
+    if let Some(s_conn) = s_conn {
+        Ok(s_conn.send_request(req).await?)
+    } else {
+        Err(LolbError::Message("No service accepted incoming request"))
+    }
 }
 
 async fn response_to_client<'a, P, S>(
