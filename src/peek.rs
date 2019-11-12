@@ -10,13 +10,13 @@ use std::task::{Context, Poll};
 #[derive(Debug)]
 pub struct Peekable<R>
 where
-    R: io::Read + AsyncRead + Unpin,
+    R: io::Read + AsyncRead + Unpin + io::Write,
 {
     pub(crate) wrapped: R,
     buffered: BytesMut,
 }
 
-impl<R: io::Read + AsyncRead + Unpin> Peekable<R> {
+impl<R: io::Read + AsyncRead + Unpin + io::Write + AsyncWrite> Peekable<R> {
     pub fn new(wrapped: R) -> Self {
         Peekable {
             wrapped,
@@ -56,13 +56,13 @@ impl<R: io::Read + AsyncRead + Unpin> Peekable<R> {
     }
 }
 
-impl<R: io::Read + AsyncRead + Unpin> io::Read for Peekable<R> {
+impl<R: io::Read + AsyncRead + Unpin + io::Write> io::Read for Peekable<R> {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         io::Read::read(&mut self.wrapped, buf)
     }
 }
 
-impl<R: io::Read + AsyncRead + Unpin> AsyncRead for Peekable<R> {
+impl<R: io::Read + AsyncRead + Unpin + io::Write> AsyncRead for Peekable<R> {
     fn poll_read(
         self: Pin<&mut Self>,
         cx: &mut Context<'_>,
@@ -81,7 +81,7 @@ impl<R: io::Read + AsyncRead + Unpin> AsyncRead for Peekable<R> {
     }
 }
 
-impl<R: io::Read + AsyncRead + Unpin> AsyncWrite for Peekable<R>
+impl<R: io::Read + AsyncRead + Unpin + io::Write> AsyncWrite for Peekable<R>
 where
     R: AsyncWrite,
 {

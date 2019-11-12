@@ -207,14 +207,14 @@ where
             let req = http::Request::from_parts(parts, RecvBody::<S>::Http2(body));
             let res = request_to_service(lb.clone(), req).await?;
             let respond = Responder::<S>::Http2(send_resp);
-            response_to_client(lb.clone(), res, respond).await?;
+            respond.send_response(res).await?;
         }
     } else if http_version == HttpVersion::Http11 {
         // http11 have one request at a time.
         while let Some(req) = http11::parse_http11(&mut conn).await? {
             let res = request_to_service(lb.clone(), req).await?;
             let respond = Responder::Http11(conn.socket());
-            response_to_client(lb.clone(), res, respond).await?;
+            respond.send_response(res).await?;
         }
     } else {
         panic!("Unknown http version after peek: {:?}", http_version);
@@ -240,16 +240,4 @@ where
     } else {
         Err(LolbError::Message("No service accepted incoming request"))
     }
-}
-
-async fn response_to_client<'a, P, S>(
-    lb: Arc<Mutex<LoadBalancer<P>>>,
-    res: http::Response<h2::RecvStream>,
-    respond: Responder<'a, S>,
-) -> LolbResult<http::Response<h2::RecvStream>>
-where
-    P: Persist,
-    S: Socket,
-{
-    Err(LolbError::Message(""))
 }
