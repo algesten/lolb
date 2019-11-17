@@ -223,6 +223,7 @@ where
     Ok(())
 }
 
+/// Route a normalized request to a matching service.
 async fn request_to_service<'a, P, S>(
     lb: Arc<Mutex<LoadBalancer<P>>>,
     req: http::Request<RecvBody<'a, S>>,

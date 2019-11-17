@@ -3,7 +3,7 @@ use crate::{LolbError, LolbResult};
 use bytes::Bytes;
 use std::io;
 
-// TODO decode chunked encoding in an async way.
+/// Decode AsyncRead as transfer-encoding chunked.
 pub(crate) struct ChunkedDecoder<S: AsyncRead> {
     socket: S,
     amount_left: usize,
@@ -110,7 +110,7 @@ impl<S: AsyncRead + Unpin> ChunkedDecoder<S> {
     }
 }
 
-// TODO encode chunked encoding in an async way.
+/// Transfer encoding chunked to an AsyncWrite
 pub(crate) struct ChunkedEncoder<S: AsyncWrite + Unpin>(pub S);
 
 impl<S: AsyncWrite + Unpin> ChunkedEncoder<S> {
