@@ -21,6 +21,8 @@ mod http11;
 mod limit;
 pub mod peek;
 mod respond;
+mod serv_auth;
+mod serv_conn;
 mod service;
 mod util;
 
@@ -28,6 +30,8 @@ use body::*;
 use conn::*;
 pub use error::*;
 use respond::*;
+use serv_auth::*;
+use serv_conn::*;
 use service::*;
 
 pub mod acme {
@@ -86,6 +90,9 @@ where
     S: Socket,
     S: 'static,
 {
+    // First we must check if the incoming connection is a preauthed service connection.
+    // If it is, then we are acting as an h2 client instead of a server.
+    //
     let mut peeked = vec![0; PREAUTH_LEN];
     let read = conn.socket().peek(&mut peeked, &|_| false).await?;
 
@@ -99,7 +106,8 @@ where
 
     // This check must be fast for client request that are to be routed.
     if &peeked[0..4] == PREAUTH_PREFIX {
-        // now we need to determine if the remaining 8 bytes corresponds to
+        // This appears to be a preauthed service connection. To check the auth
+        // we need to determine if the remaining 8 bytes corresponds to
         // any preauthed secret.
         let n = Cursor::new(&mut peeked[4..]).get_u64_be();
         let authed = {
@@ -108,12 +116,13 @@ where
             lock.pre_auth.remove(&key)
         };
         if let Some(authed) = authed {
-            // discard the preauth from the incoming bytes.
+            // Discard the preauth from the incoming bytes.
             let read = conn.socket().read(&mut peeked).await?;
             if read < PREAUTH_LEN {
                 panic!("Discarded less than peeked length of preauth");
             }
-            // start handling the authed service.
+            // Start handling the authed service. This is where we start acting as an
+            // h2 client instead of a server.
             add_preauthed_service(lb.clone(), conn, authed).await?;
             return Ok(());
         } else {
@@ -122,7 +131,9 @@ where
         }
     }
 
-    // this is a "normal" client connection that should be routed to a service.
+    // This is a "normal" client connection that most likely should be routed to a service,
+    // but could also be an incoming service connection doing an auth. Either way, we are to
+    // act "server" to the incoming connection.
     handle_client(lb.clone(), conn).await?;
 
     Ok(())
@@ -200,11 +211,25 @@ where
     // for responding.
     if http_version == HttpVersion::Http2 {
         let mut h2 = h2::server::handshake(conn.socket()).await?;
+        let mut check_service_auth = true;
         // http2 can have several streams (requests) in the same socket.
         while let Some(r) = h2.accept().await {
             let (h2req, send_resp) = r?;
             let (parts, body) = h2req.into_parts();
             let req = http::Request::from_parts(parts, RecvBody::<S>::Http2(body));
+
+            // we only check service auth once in the first stream.
+            if check_service_auth {
+                check_service_auth = false;
+                if is_service_auth(lb.clone(), &req) {
+                    // this is a service auth request, deal with it and no further processing
+                    // of streams in this h2 connection.
+                    handle_service_auth(lb.clone(), req).await?;
+                    return Ok(());
+                }
+            }
+
+            // route request to service and wait for a response
             let res = request_to_service(lb.clone(), req).await?;
             let respond = Responder::<S>::Http2(send_resp);
             respond.send_response(res).await?;
@@ -212,6 +237,7 @@ where
     } else if http_version == HttpVersion::Http11 {
         // http11 have one request at a time.
         while let Some(req) = http11::parse_http11(&mut conn).await? {
+            // route request to service and wait for a response
             let res = request_to_service(lb.clone(), req).await?;
             let respond = Responder::Http11(conn.socket());
             respond.send_response(res).await?;
@@ -220,6 +246,30 @@ where
         panic!("Unknown http version after peek: {:?}", http_version);
     }
 
+    Ok(())
+}
+
+/// Check if this request is a service auth.
+pub(crate) fn is_service_auth<'a, P, S>(
+    lb: Arc<Mutex<LoadBalancer<P>>>,
+    req: &http::Request<RecvBody<'a, S>>,
+) -> bool
+where
+    P: Persist,
+    S: Socket,
+{
+    false
+}
+
+/// Authenticate incoming service auth.
+async fn handle_service_auth<'a, P, S>(
+    lb: Arc<Mutex<LoadBalancer<P>>>,
+    req: http::Request<RecvBody<'a, S>>,
+) -> LolbResult<()>
+where
+    P: Persist,
+    S: Socket,
+{
     Ok(())
 }
 
