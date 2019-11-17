@@ -4,9 +4,22 @@ use bytes::Bytes;
 use std::io;
 
 // TODO decode chunked encoding in an async way.
-pub(crate) struct ChunkedDecoder<S: AsyncRead>(pub S);
+pub(crate) struct ChunkedDecoder<S: AsyncRead> {
+    socket: S,
+    amount_left: usize,
+}
+
+/// Amount we max read from the underlying chunked stream. To not use up too much memory.
+const MAX_READ_SIZE: usize = 1024 * 1024;
 
 impl<S: AsyncRead + Unpin> ChunkedDecoder<S> {
+    pub fn new(socket: S) -> Self {
+        ChunkedDecoder {
+            socket,
+            amount_left: 0,
+        }
+    }
+
     pub async fn data(&mut self) -> Option<LolbResult<Bytes>> {
         match self.data_res().await {
             Ok(Some(r)) => Some(Ok(r)),
@@ -16,12 +29,17 @@ impl<S: AsyncRead + Unpin> ChunkedDecoder<S> {
     }
 
     async fn data_res(&mut self) -> LolbResult<Option<Bytes>> {
-        let chunk_size = self.read_chunk_size().await?;
-        if chunk_size == 0 {
-            return Ok(None);
+        if self.amount_left == 0 {
+            let chunk_size = self.read_chunk_size().await?;
+            if chunk_size == 0 {
+                return Ok(None);
+            }
+            self.amount_left = chunk_size;
         }
-        let mut buf = Vec::with_capacity(chunk_size);
-        self.read_buf(chunk_size, &mut buf).await?;
+        let to_read = self.amount_left.min(MAX_READ_SIZE);
+        self.amount_left -= to_read;
+        let mut buf = Vec::with_capacity(to_read);
+        self.read_buf(to_read, &mut buf).await?;
         self.skip_until_lf().await?; // skip trailing \r\n
         Ok(Some(buf.into()))
     }
@@ -81,7 +99,7 @@ impl<S: AsyncRead + Unpin> ChunkedDecoder<S> {
     }
 
     async fn read_amount(&mut self, buf: &mut [u8]) -> LolbResult<()> {
-        let read = self.0.read_exact(buf).await?;
+        let read = self.socket.read_exact(buf).await?;
         if read != buf.len() {
             return Err(LolbError::Io(io::Error::new(
                 io::ErrorKind::InvalidData,

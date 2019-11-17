@@ -69,7 +69,7 @@ where
     let (parts, _) = req.into_parts();
 
     let body = if recv_chunked {
-        RecvBody::Http11Chunked(ChunkedDecoder(conn.socket()))
+        RecvBody::Http11Chunked(ChunkedDecoder::new(conn.socket()))
     } else {
         RecvBody::Http11Plain(LimitRead::new(conn.socket(), content_len))
     };
