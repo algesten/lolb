@@ -116,7 +116,13 @@ async fn send_response_http1<S: Socket>(
     // send body.
     while let Some(chunk) = body.data().await {
         let body_data = chunk?;
-        AsyncWriteExt::write_all(&mut http11body, &body_data[..]).await?;
+        if body_data.is_empty() {
+            break;
+        }
+        http11body.send_chunk(body_data).await?;
     }
+
+    http11body.send_finish().await?;
+
     Ok(())
 }

@@ -2,9 +2,8 @@ use crate::chunked::{ChunkedDecoder, ChunkedEncoder};
 use crate::limit::{LimitRead, LimitWrite};
 use crate::peek::Peekable;
 use crate::Socket;
-use crate::{AsyncRead, AsyncReadExt, AsyncWrite, LolbError, LolbResult};
+use crate::{AsyncRead, AsyncReadExt, AsyncWriteExt, LolbError, LolbResult};
 use bytes::{Bytes, BytesMut};
-use std::io;
 
 /// Helper type to unite body stream reading for http11 and http2
 pub(crate) enum RecvBody<'a, S>
@@ -21,7 +20,7 @@ impl<'a, S: Socket> RecvBody<'a, S> {
         match self {
             RecvBody::Http2(r) => r.data().await.map(|r| Ok(r?)),
             RecvBody::Http11Plain(r) => read_chunk(r).await,
-            RecvBody::Http11Chunked(r) => read_chunk(r).await,
+            RecvBody::Http11Chunked(r) => r.data().await,
         }
     }
 
@@ -82,31 +81,29 @@ where
     Chunked(ChunkedEncoder<&'a mut S>),
 }
 
-// tedious proxying
-impl<'a, S: Socket> AsyncWrite for Http11Body<'a, S> {
-    fn poll_write(
-        self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-        buf: &[u8],
-    ) -> Poll<Result<usize, io::Error>> {
-        match self.get_mut() {
-            Http11Body::NoBody => Poll::Ready(Ok(0)),
-            Http11Body::Limited(w) => Pin::new(w).poll_write(cx, buf),
-            Http11Body::Chunked(w) => Pin::new(w).poll_write(cx, buf),
+impl<'a, S: Socket> Http11Body<'a, S> {
+    pub(crate) async fn send_chunk(&mut self, chunk: Bytes) -> LolbResult<()> {
+        use Http11Body::*;
+        match self {
+            NoBody => {}
+            Limited(w) => {
+                w.write_all(&chunk[..]).await?;
+            }
+            Chunked(w) => {
+                w.send_chunk(chunk).await?;
+            }
         }
+        Ok(())
     }
-    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), io::Error>> {
-        match self.get_mut() {
-            Http11Body::NoBody => Poll::Ready(Ok(())),
-            Http11Body::Limited(w) => Pin::new(w).poll_flush(cx),
-            Http11Body::Chunked(w) => Pin::new(w).poll_flush(cx),
+    pub(crate) async fn send_finish(&mut self) -> LolbResult<()> {
+        use Http11Body::*;
+        match self {
+            NoBody => {}
+            Limited(_) => {}
+            Chunked(w) => {
+                w.send_finish().await?;
+            }
         }
-    }
-    fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), io::Error>> {
-        match self.get_mut() {
-            Http11Body::NoBody => Poll::Ready(Ok(())),
-            Http11Body::Limited(w) => Pin::new(w).poll_shutdown(cx),
-            Http11Body::Chunked(w) => Pin::new(w).poll_shutdown(cx),
-        }
+        Ok(())
     }
 }
