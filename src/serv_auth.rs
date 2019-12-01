@@ -1,20 +1,28 @@
 use crate::service::{ServiceDomain, ServiceHost, ServiceRoute};
-use std::time::{Duration, Instant};
+use crate::util::current_time_millis;
+use serde::{Deserialize, Serialize};
+use std::time::Duration;
 
-/// A preauthed record associated with a unique secret valid for a limited time.
+/// Secret key for a preauthed record. This is sent as a preamble when a service connects
+/// for the second time after auth.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) struct PreAuthedKey(pub u64);
+
+/// A preauthed record with information service provided as part of the auth.
+#[derive(Debug, Serialize, Deserialize)]
 pub(crate) struct PreAuthed {
-    created: Instant,
+    created: u64, // unix time millis
     domain: String,
     host: String,
     prefix: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub(crate) struct PreAuthedKey(pub u64);
-
 impl PreAuthed {
+    pub(crate) fn created(&self) -> u64 {
+        self.created
+    }
     pub(crate) fn is_valid(&self) -> bool {
-        let age = Instant::now() - self.created;
+        let age = Duration::from_millis(current_time_millis() - self.created);
         age < Duration::from_secs(10)
     }
     pub(crate) fn domain(&self) -> &str {

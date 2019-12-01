@@ -4,9 +4,7 @@
 #[macro_use]
 extern crate log;
 
-use crate::acme::{Account, Persist};
 use bytes::Buf;
-use std::collections::HashMap;
 use std::future::Future;
 use std::io::Cursor;
 use std::sync::{Arc, Mutex};
@@ -20,6 +18,7 @@ mod error;
 mod http11;
 mod limit;
 pub mod peek;
+pub mod persist;
 mod respond;
 mod serv_auth;
 mod serv_conn;
@@ -34,10 +33,8 @@ use serv_auth::*;
 use serv_conn::*;
 use service::*;
 
-pub mod acme {
-    pub use acme_lib::persist::*;
-    pub use acme_lib::{Account, Directory, DirectoryUrl};
-}
+use crate::persist::{load_preauthed, Persist};
+use acme_lib::Account;
 
 pub(crate) const PATH_NODE_REGISTER: &str = "/__lolb_node_register";
 pub(crate) const PATH_KEEP_ALIVE: &str = "/__lolb_keep_alive";
@@ -47,12 +44,12 @@ pub struct LoadBalancer<P>
 where
     P: Persist,
 {
+    /// Persistence for saving/loading stuff.
+    persist: P,
     /// The acme account to use for managing TLS certificates.
     account: Account<P>,
     /// Configured serviced domains.
     services: Services,
-    /// Pre-auth service connections where we now expect a http2 server conn.
-    pre_auth: HashMap<PreAuthedKey, PreAuthed>,
 }
 
 pub async fn accept_incoming<P, S, R, F>(
@@ -112,8 +109,8 @@ where
         let n = Cursor::new(&mut peeked[4..]).get_u64_be();
         let authed = {
             let key = PreAuthedKey(n);
-            let mut lock = lb.lock().unwrap();
-            lock.pre_auth.remove(&key)
+            let lock = lb.lock().unwrap();
+            load_preauthed(&lock.persist, &key).await?
         };
         if let Some(authed) = authed {
             // Discard the preauth from the incoming bytes.
@@ -251,14 +248,14 @@ where
 
 /// Check if this request is a service auth.
 pub(crate) fn is_service_auth<'a, P, S>(
-    lb: Arc<Mutex<LoadBalancer<P>>>,
+    _lb: Arc<Mutex<LoadBalancer<P>>>,
     req: &http::Request<RecvBody<'a, S>>,
 ) -> bool
 where
     P: Persist,
     S: Socket,
 {
-    false
+    req.uri().path() == PATH_NODE_REGISTER
 }
 
 /// Authenticate incoming service auth.
