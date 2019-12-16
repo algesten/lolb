@@ -6,18 +6,18 @@ use std::time::Duration;
 /// Secret key for a preauthed record. This is sent as a preamble when a service connects
 /// for the second time after auth.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub(crate) struct PreAuthedKey(pub u64);
+pub(crate) struct ReconnectKey(pub u64);
 
 /// A preauthed record with information service provided as part of the auth.
 #[derive(Debug, Serialize, Deserialize)]
-pub(crate) struct PreAuthed {
+pub(crate) struct Preauthed {
     created: u64, // unix time millis
     domain: String,
     host: String,
     prefix: String,
 }
 
-impl PreAuthed {
+impl Preauthed {
     pub(crate) fn created(&self) -> u64 {
         self.created
     }

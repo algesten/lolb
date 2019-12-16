@@ -1,4 +1,4 @@
-use crate::serv_auth::PreAuthed;
+use crate::serv_auth::Preauthed;
 use crate::serv_conn::ServiceConnection;
 use crate::util::ArcExt;
 use acme_lib::Certificate;
@@ -34,7 +34,15 @@ pub(crate) struct ServiceDomain {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ServiceAuth {
     /// Some secret string shared between the load balancer and the service.
-    PreSharedSecret(String),
+    PresharedKey(String),
+}
+
+impl ServiceAuth {
+    fn is_valid(&self, secret: &str) -> bool {
+        match self {
+            ServiceAuth::PresharedKey(x) => secret == x,
+        }
+    }
 }
 
 /// Service host gather a bunch of routes for that host. It is possible to route
@@ -68,7 +76,16 @@ impl Services {
             ..Default::default()
         }
     }
-    pub fn add_preauthed(&mut self, p: PreAuthed, c: Weak<ServiceConnection>) {
+    pub fn is_valid_secret(&self, p: &Preauthed, secret: &str) -> bool {
+        let service = self.domains.iter().find(|s| p.is_same_domain(s));
+        if let Some(service) = service {
+            return service.auth.is_valid(secret);
+        } else {
+            // XXX log something.
+        }
+        false
+    }
+    pub fn add_preauthed(&mut self, p: Preauthed, c: Weak<ServiceConnection>) {
         let service = self
             .domains
             .iter_mut()
@@ -145,7 +162,7 @@ impl ServiceDomain {
         &self.domain
     }
     /// add/create a routing entry for a preauthed service connection.
-    pub fn add_preauthed(&mut self, p: PreAuthed, c: Weak<ServiceConnection>) {
+    pub fn add_preauthed(&mut self, p: Preauthed, c: Weak<ServiceConnection>) {
         let mut idx = self.hosts.iter().position(|h| p.is_same_host(h));
         if idx.is_none() {
             idx = Some(self.hosts.len());
@@ -168,7 +185,7 @@ impl ServiceHost {
         &self.host
     }
     /// add/create a routing entry for a preauthed service connection.
-    pub fn add_preauthed(&mut self, p: PreAuthed, c: Weak<ServiceConnection>) {
+    pub fn add_preauthed(&mut self, p: Preauthed, c: Weak<ServiceConnection>) {
         let mut idx = self.routes.iter().position(|r| p.is_same_prefix(r));
         if idx.is_none() {
             idx = Some(self.routes.len());

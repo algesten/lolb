@@ -4,7 +4,7 @@
 #[macro_use]
 extern crate log;
 
-use bytes::Buf;
+use bytes::{Buf, BytesMut};
 use std::future::Future;
 use std::io::Cursor;
 use std::sync::{Arc, Mutex};
@@ -13,6 +13,7 @@ pub(crate) use tokio_io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
 mod body;
 mod chunked;
+mod conf;
 mod conn;
 mod error;
 mod http11;
@@ -26,6 +27,7 @@ mod service;
 mod util;
 
 use body::*;
+pub use conf::*;
 use conn::*;
 pub use error::*;
 use respond::*;
@@ -33,17 +35,20 @@ use serv_auth::*;
 use serv_conn::*;
 use service::*;
 
-use crate::persist::{load_preauthed, Persist};
+use crate::persist::{load_preauthed, save_preauthed, Persist};
 use acme_lib::Account;
 
 pub(crate) const PATH_NODE_REGISTER: &str = "/__lolb_node_register";
 pub(crate) const PATH_KEEP_ALIVE: &str = "/__lolb_keep_alive";
+pub(crate) const HEADER_AUTH: &str = "x-lolb-auth";
 
 /// A load balancer instance.
 pub struct LoadBalancer<P>
 where
     P: Persist,
 {
+    /// Load balancer configuration.
+    config: Config,
     /// Persistence for saving/loading stuff.
     persist: P,
     /// The acme account to use for managing TLS certificates.
@@ -108,9 +113,9 @@ where
         // any preauthed secret.
         let n = Cursor::new(&mut peeked[4..]).get_u64_be();
         let authed = {
-            let key = PreAuthedKey(n);
+            let key = ReconnectKey(n);
             let lock = lb.lock().unwrap();
-            load_preauthed(&lock.persist, &key).await?
+            load_preauthed(&lock.persist, key).await?
         };
         if let Some(authed) = authed {
             // Discard the preauth from the incoming bytes.
@@ -139,7 +144,7 @@ where
 async fn add_preauthed_service<P, S>(
     lb: Arc<Mutex<LoadBalancer<P>>>,
     mut conn: Connection<S>,
-    preauthed: PreAuthed,
+    preauthed: Preauthed,
 ) -> LolbResult<()>
 where
     P: Persist,
@@ -267,6 +272,50 @@ where
     P: Persist,
     S: Socket,
 {
+    let (parts, mut body) = req.into_parts();
+    let req = http::Request::from_parts(parts, ());
+
+    // read body into a Preauthed with details of the service.
+    let preauthed: Preauthed = {
+        let mut bytes = BytesMut::new();
+        while let Some(data) = body.data().await {
+            let data = data?;
+            bytes.extend_from_slice(&data[..]);
+            if bytes.len() > 100 * 1024 {
+                return LolbResult::Err(LolbError::Message("Preauth is too big"));
+            }
+        }
+        serde_json::from_slice(&bytes[..])
+            .map_err(|e| LolbError::Owned(format!("Bad preauth: {}", e)))?
+    };
+
+    // read header with secret
+    let secret = req
+        .headers()
+        .get(HEADER_AUTH)
+        .ok_or_else(|| LolbError::Owned(format!("Missing {} header", HEADER_AUTH)))
+        .and_then(|v| {
+            v.to_str()
+                .map_err(|_| LolbError::Message("Failed to interpret auth header as a string"))
+        })?;
+
+    // check auth
+    let persist = {
+        let lock = lb.lock().unwrap();
+
+        if !lock.services.is_valid_secret(&preauthed, &secret) {
+            // XXX log something
+            return LolbResult::Err(LolbError::Message("Bad auth"));
+        }
+
+        lock.persist.clone()
+    };
+
+    // auth success, generate a new one-off reconnect key
+    let key = ReconnectKey(rand::random());
+
+    save_preauthed(&persist, key, &preauthed).await?;
+
     Ok(())
 }
 
